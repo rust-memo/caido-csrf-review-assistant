@@ -21,7 +21,9 @@ describe("professional report exports", () => {
       "2026-07-15T10:00:00.000Z",
     );
     expect(JSON.parse(file.content)).toMatchObject({
-      generator: "Caido CSRF Review Assistant 1.1.0",
+      schemaVersion: 1,
+      version: "1.1.1",
+      generator: "Caido CSRF Review Assistant 1.1.1",
       summary: { total: 1, p1: 1 },
     });
     expect(file.content).not.toContain("request-1");
@@ -36,6 +38,7 @@ describe("professional report exports", () => {
     const html = buildReport("html", [value], true).content;
     expect(html).toContain("&lt;script&gt;");
     expect(html).not.toContain("<script>alert");
+    expect(html).toContain("by version 1.1.1");
     expect(buildReport("csv", [value], true).content).toContain("'=HYPERLINK");
   });
 

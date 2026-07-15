@@ -2,6 +2,25 @@
 
 All notable changes to this project are documented here.
 
+## 1.1.1 — 2026-07-15
+
+### Added
+
+- Added visible plugin version information to the application header.
+- Added `schemaVersion` and plugin `version` metadata to JSON report exports.
+
+### Changed
+
+- Updated the Caido release action from 1.9.0 to 1.20.0.
+- Added a release preflight that refuses to overwrite an existing version tag.
+- Kept Dependabot development updates within the supported Node 22, ESLint 9, and TypeScript 6 major versions.
+
+### Fixed
+
+- Fixed JSON and HTML reports continuing to identify themselves as version 1.1.0 after a plugin upgrade.
+- Report generator metadata now derives from the backend package version instead of a duplicated hard-coded value.
+- Prevented incompatible grouped major dependency updates from breaking the validation workflow.
+
 ## 1.1.0 — 2026-07-15
 
 ### Added

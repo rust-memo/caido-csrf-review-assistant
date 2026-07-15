@@ -10,7 +10,7 @@ export default defineConfig({
   name: "CSRF Review Assistant",
   description:
     "Passive evidence-driven CSRF and CSWSH review workflow for Caido",
-  version: "1.1.0",
+  version: "1.1.1",
   author: {
     name: "rust-memo",
     email: "rust-memo@users.noreply.github.com",

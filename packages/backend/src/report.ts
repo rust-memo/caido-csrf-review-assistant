@@ -1,3 +1,5 @@
+import packageMetadata from "../package.json";
+
 import type {
   CandidateDTO,
   ReportFile,
@@ -7,6 +9,7 @@ import type {
 
 const SENSITIVE =
   "password|passwd|pwd|token|secret|api[_-]?key|authorization|cookie|session|csrf|xsrf";
+const PLUGIN_VERSION = packageMetadata.version;
 
 export function buildReport(
   format: ReportFormat,
@@ -108,8 +111,10 @@ function reportCandidate(
 
 function document(rows: ReportCandidate[], generatedAt: string) {
   return {
+    schemaVersion: 1,
+    version: PLUGIN_VERSION,
     generatedAt,
-    generator: "Caido CSRF Review Assistant 1.1.0",
+    generator: `Caido CSRF Review Assistant ${PLUGIN_VERSION}`,
     notice:
       "Passive review candidates are not confirmed vulnerabilities. Raw HTTP, request IDs, endpoint keys, credentials, and token values are excluded.",
     summary: {
@@ -194,7 +199,7 @@ function html(
         `<tr><td>${escapeHTML(row.priority)}</td><td>${escapeHTML(row.reviewStatus)}</td><td>${escapeHTML(row.endpoint)}</td><td>${escapeHTML(row.action)}</td><td>${escapeHTML(row.authentication)}</td><td>${escapeHTML(row.token)}</td><td>${escapeHTML(row.cookieDefense)}</td><td>${escapeHTML(verificationSummary(row.verification))}</td>${includeNotes ? `<td>${escapeHTML(row.note ?? "")}</td>` : ""}</tr>`,
     )
     .join("");
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'"><title>CSRF Review Assistant report</title><style>body{font:14px system-ui;margin:32px;color:#17202a}h1{color:#9a3412}.notice{padding:12px;border:1px solid #fdba74;background:#fff7ed}.metrics{display:flex;gap:16px;flex-wrap:wrap;font-weight:700}table{width:100%;border-collapse:collapse;margin-top:18px}th,td{padding:7px;border:1px solid #cbd5e1;text-align:left;vertical-align:top;white-space:pre-wrap}th{color:white;background:#1e293b}</style></head><body><h1>Caido CSRF Review Assistant</h1><p>Generated ${escapeHTML(generatedAt)} by version 1.1.0.</p><p class="notice">Passive review candidates are not confirmed vulnerabilities. Verify real server-side state using authorized test accounts.</p><p class="metrics"><span>${summary.total} candidates</span><span>${summary.p1} P1</span><span>${summary.p2} P2</span><span>${summary.confirmed} confirmed</span><span>${summary.protected} protection observed</span></p><table><thead><tr><th>Priority</th><th>Status</th><th>Endpoint</th><th>Action</th><th>Authentication</th><th>Token</th><th>Cookie defense</th><th>Verification</th>${includeNotes ? "<th>Reviewer note</th>" : ""}</tr></thead><tbody>${body}</tbody></table></body></html>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'"><title>CSRF Review Assistant report</title><style>body{font:14px system-ui;margin:32px;color:#17202a}h1{color:#9a3412}.notice{padding:12px;border:1px solid #fdba74;background:#fff7ed}.metrics{display:flex;gap:16px;flex-wrap:wrap;font-weight:700}table{width:100%;border-collapse:collapse;margin-top:18px}th,td{padding:7px;border:1px solid #cbd5e1;text-align:left;vertical-align:top;white-space:pre-wrap}th{color:white;background:#1e293b}</style></head><body><h1>Caido CSRF Review Assistant</h1><p>Generated ${escapeHTML(generatedAt)} by version ${escapeHTML(PLUGIN_VERSION)}.</p><p class="notice">Passive review candidates are not confirmed vulnerabilities. Verify real server-side state using authorized test accounts.</p><p class="metrics"><span>${summary.total} candidates</span><span>${summary.p1} P1</span><span>${summary.p2} P2</span><span>${summary.confirmed} confirmed</span><span>${summary.protected} protection observed</span></p><table><thead><tr><th>Priority</th><th>Status</th><th>Endpoint</th><th>Action</th><th>Authentication</th><th>Token</th><th>Cookie defense</th><th>Verification</th>${includeNotes ? "<th>Reviewer note</th>" : ""}</tr></thead><tbody>${body}</tbody></table></body></html>`;
 }
 
 function verificationSummary(value: VerificationRecord): string {

@@ -2,6 +2,8 @@
 import type { Overview, ScanState } from "backend";
 import { onMounted, onUnmounted, provide, reactive, ref } from "vue";
 
+import packageMetadata from "../../package.json";
+
 import ConfirmDialog from "@/components/ConfirmDialog.vue";
 import { ConfirmKey, type ConfirmOptions } from "@/plugins/confirm";
 import { useSDK } from "@/plugins/sdk";
@@ -14,6 +16,7 @@ import SettingsView from "@/views/SettingsView.vue";
 type Tab = "dashboard" | "candidates" | "reports" | "settings" | "guide";
 
 const sdk = useSDK();
+const pluginVersion = packageMetadata.version;
 const overview = ref<Overview>();
 const state = ref<ScanState>({
   phase: "IDLE",
@@ -133,7 +136,10 @@ const tabs: Array<{ id: Tab; label: string; icon: string }> = [
         <span class="csrf-brand-mark" aria-hidden="true">S</span>
         <div>
           <span class="csrf-eyebrow">PASSIVE SECURITY WORKFLOW</span>
-          <h1>CSRF Review Assistant</h1>
+          <h1>
+            CSRF Review Assistant
+            <span class="csrf-version-badge">v{{ pluginVersion }}</span>
+          </h1>
         </div>
       </div>
       <div class="csrf-header-status">

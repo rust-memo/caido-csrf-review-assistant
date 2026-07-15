@@ -80,8 +80,22 @@
 }
 
 .csrf-brand h1 {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
   margin-top: 0.12rem;
   font-size: 1.02rem;
+}
+
+.csrf-version-badge {
+  padding: 0.12rem 0.35rem;
+  border: 1px solid rgb(249 115 22 / 28%);
+  border-radius: 999px;
+  color: #fdba74;
+  background: rgb(249 115 22 / 9%);
+  font-size: 0.55rem;
+  font-weight: 750;
+  letter-spacing: 0.04em;
 }
 
 .csrf-eyebrow {
