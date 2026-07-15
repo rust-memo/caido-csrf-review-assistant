@@ -146,6 +146,49 @@ describe("createVariants", () => {
     expect(removed).toContain('name="title"');
     expect(removed).not.toContain('name="csrf_token"');
   });
+
+  it("edits a token inside nested XML without replacing its parent", () => {
+    const variants = createVariants(
+      request({
+        body: "<root><email>x@test</email><csrf_token>secret-value</csrf_token></root>",
+        contentType: "application/xml",
+      }),
+      assessment(),
+    );
+    const removed = variants[1]?.spec.getBody()?.toText() ?? "";
+    expect(removed).toBe("<root><email>x@test</email></root>");
+  });
+
+  it("edits token headers, query parameters, and nested JSON", () => {
+    const variants = createVariants(
+      request({
+        query: "step=2&x_csrf_token=query-secret",
+        body: '{"profile":{"email":"x@test","x_csrf_token":"body-secret"}}',
+        contentType: "application/json",
+        headers: { "X-CSRF-Token": ["header-secret"] },
+      }),
+      assessment("x_csrf_token"),
+    );
+    const removed = variants[1]!.spec;
+    expect(removed.getHeader("X-CSRF-Token")).toBeUndefined();
+    expect(removed.getQuery()).toBe("step=2");
+    expect(removed.getBody()?.toText()).toBe('{"profile":{"email":"x@test"}}');
+    expect(variants.map((item) => item.label)).toContain(
+      "05 text/plain compatibility",
+    );
+  });
+
+  it("keeps malformed bodies and creates only safe applicable variants", () => {
+    const variants = createVariants(
+      request({ body: "{invalid", contentType: "application/json" }),
+      assessment(""),
+    );
+    expect(variants.map((item) => item.label)).toEqual([
+      "00 control (captured request)",
+      "04 cross-site header evidence",
+      "05 text/plain compatibility",
+    ]);
+  });
 });
 
 describe("generateOfflinePoc", () => {

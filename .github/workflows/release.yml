@@ -1,0 +1,64 @@
+name: Release
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: 22
+
+jobs:
+  release:
+    name: Verify and release
+    if: github.ref_name == 'main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Run release quality gates
+        run: |
+          pnpm typecheck
+          pnpm test:coverage
+          pnpm lint
+          pnpm knip
+          pnpm audit --audit-level high
+      - name: Build package
+        run: pnpm build
+      - name: Verify package versions
+        id: meta
+        run: |
+          EXPECTED=$(node -p "require('./package.json').version")
+          BACKEND=$(node -p "require('./packages/backend/package.json').version")
+          FRONTEND=$(node -p "require('./packages/frontend/package.json').version")
+          MANIFEST=$(unzip -p dist/plugin_package.zip manifest.json | jq -r .version)
+          test "$EXPECTED" = "$BACKEND"
+          test "$EXPECTED" = "$FRONTEND"
+          test "$EXPECTED" = "$MANIFEST"
+          echo "version=$EXPECTED" >> "$GITHUB_OUTPUT"
+      - name: Create checksum
+        working-directory: dist
+        run: sha256sum plugin_package.zip > SHA256SUMS
+      - name: Create immutable release
+        uses: caido/action-release@v1.9.0
+        with:
+          tag: ${{ steps.meta.outputs.version }}
+          commit: ${{ github.sha }}
+          body: "CSRF Review Assistant ${{ steps.meta.outputs.version }}. See CHANGELOG.md for details."
+          artifacts: "dist/plugin_package.zip,dist/SHA256SUMS"
+          immutableCreate: true

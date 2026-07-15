@@ -1,20 +1,28 @@
 import type { SDK } from "caido:plugin";
-import type { Cursor, ID, Request, Response } from "caido:utils";
+import type { Request, Response } from "caido:utils";
 
 import { analyze } from "./analyzer";
 import { TrafficContext } from "./context";
 import { toAnalysisInput } from "./message";
 import { generateOfflinePoc } from "./poc";
+import { buildReport } from "./report";
 import { CsrfStore } from "./store";
 import type {
   Assessment,
+  CandidateDTO,
+  CandidateQuery,
   CsrfSettings,
+  DataArea,
   MessageDetails,
   OfflinePoc,
+  Overview,
+  Page,
   PreparedVariants,
+  ReportFile,
+  ReportFormat,
   ReviewStatus,
   ScanState,
-  Snapshot,
+  VerificationRecord,
 } from "./types";
 import { createVariants } from "./variants";
 
@@ -28,6 +36,8 @@ type Work = {
   request: Request;
   response: Response;
 };
+
+const MAX_QUEUE = 1_000;
 
 export class CsrfScanner {
   private readonly store = new CsrfStore();
@@ -49,7 +59,9 @@ export class CsrfScanner {
   private readonly queue: Work[] = [];
   private readonly processed = new Set<string>();
   private activeWorkers = 0;
-  private lastSnapshot = 0;
+  private revision = 0;
+  private readonly pendingAreas = new Set<DataArea>();
+  private changeScheduled = false;
 
   async initialize(sdk: AssistantSDK): Promise<void> {
     await this.store.initialize(sdk);
@@ -58,14 +70,10 @@ export class CsrfScanner {
       void this.observe(sdk, request, response);
     });
     sdk.events.onProjectChange((_eventSDK, project) => {
-      this.context.clear();
-      this.monitorSince = new Date();
-      if (project === null) this.cancel(sdk, "No active Caido project");
-      else if (this.requireSettings().autoHistory) void this.rescan(sdk, true);
-      else this.resetRuntime(sdk, "Monitoring new responses");
+      void this.changeProject(sdk, project !== null);
     });
     if (this.settings.analysisEnabled && this.settings.autoHistory)
-      await this.rescan(sdk, true);
+      await this.rescan(sdk, false);
     else
       this.resetRuntime(
         sdk,
@@ -76,27 +84,43 @@ export class CsrfScanner {
     this.startMonitor(sdk);
   }
 
-  async getSnapshot(sdk: AssistantSDK): Promise<Snapshot> {
+  async getOverview(sdk: AssistantSDK): Promise<Overview> {
     const settings = this.requireSettings();
     const projectId = await this.currentProjectId(sdk);
     if (projectId === undefined)
       return {
-        candidates: [],
         settings,
         state: { ...this.state, message: "No active Caido project" },
+        summary: emptySummary(),
+        recentCandidates: [],
+        topHosts: [],
       };
-    return {
-      candidates: await this.store.candidates(projectId),
-      settings,
-      state: this.copyState(),
-    };
+    const overview = await this.store.overview(projectId);
+    return { settings, state: this.copyState(), ...overview };
+  }
+
+  async listCandidates(
+    sdk: AssistantSDK,
+    query: CandidateQuery,
+  ): Promise<Page<CandidateDTO>> {
+    return this.store.listCandidates(await this.requireProjectId(sdk), query);
+  }
+
+  async getCandidate(
+    sdk: AssistantSDK,
+    endpointKey: string,
+  ): Promise<CandidateDTO | undefined> {
+    return this.store.getCandidate(
+      await this.requireProjectId(sdk),
+      endpointKey,
+    );
   }
 
   async getMessage(
     sdk: AssistantSDK,
     requestId: string,
   ): Promise<MessageDetails | undefined> {
-    const pair = await sdk.requests.get(requestId as ID);
+    const pair = await sdk.requests.get(requestId);
     if (pair === undefined) return undefined;
     const requestRaw = pair.request.getRaw();
     const responseRaw = pair.response?.getRaw();
@@ -121,13 +145,17 @@ export class CsrfScanner {
     sdk: AssistantSDK,
     value: CsrfSettings,
   ): Promise<CsrfSettings> {
+    await this.stopAndDrain(sdk, "Applying settings");
     this.settings = await this.store.saveSettings(value);
     this.monitorSince = new Date();
-    if (!this.settings.analysisEnabled) {
-      this.cancel(sdk, "Passive analysis disabled");
-      this.emitSnapshot(sdk);
-    } else if (this.settings.autoHistory) await this.rescan(sdk, true);
-    else this.resetRuntime(sdk, "Settings saved; monitoring new responses");
+    this.resetRuntime(
+      sdk,
+      this.settings.analysisEnabled
+        ? "Settings saved; existing candidates were not changed"
+        : "Passive analysis disabled",
+      false,
+    );
+    this.markChanged(sdk, "settings", "overview");
     return this.settings;
   }
 
@@ -143,20 +171,48 @@ export class CsrfScanner {
       status,
       note,
     );
-    this.emitSnapshot(sdk);
+    this.markChanged(sdk, "candidates", "overview");
+  }
+
+  async setReviews(
+    sdk: AssistantSDK,
+    endpointKeys: string[],
+    status: ReviewStatus,
+  ): Promise<void> {
+    await this.store.setReviews(
+      await this.requireProjectId(sdk),
+      endpointKeys,
+      status,
+    );
+    this.markChanged(sdk, "candidates", "overview");
+  }
+
+  async saveVerification(
+    sdk: AssistantSDK,
+    endpointKey: string,
+    value: VerificationRecord,
+  ): Promise<VerificationRecord> {
+    const saved = await this.store.saveVerification(
+      await this.requireProjectId(sdk),
+      endpointKey,
+      value,
+    );
+    this.markChanged(sdk, "candidates", "overview");
+    return saved;
   }
 
   async analyzeRequest(sdk: AssistantSDK, requestId: string): Promise<string> {
     const projectId = await this.requireProjectId(sdk);
-    const pair = await sdk.requests.get(requestId as ID);
+    const pair = await sdk.requests.get(requestId);
     if (pair === undefined || pair.response === undefined)
       throw new Error("The selected request and response are unavailable");
     if (this.requireSettings().scopeOnly && !sdk.requests.inScope(pair.request))
       throw new Error(
         "The request is outside Scope. Add it to Scope or disable Scope-only analysis.",
       );
-    const assessment = await this.process({
-      generation: this.generation,
+    const generation = this.generation;
+    const assessment = await this.process(sdk, {
+      generation,
       projectId,
       request: pair.request,
       response: pair.response,
@@ -165,7 +221,6 @@ export class CsrfScanner {
       throw new Error(
         "The selected request does not meet the current CSRF review policy",
       );
-    this.emitSnapshot(sdk);
     sdk.api.send("focus-candidate", assessment.endpointKey);
     return assessment.endpointKey;
   }
@@ -175,7 +230,7 @@ export class CsrfScanner {
     endpointKey: string,
   ): Promise<PreparedVariants> {
     const candidate = await this.requireCandidate(sdk, endpointKey);
-    const pair = await sdk.requests.get(candidate.requestId as ID);
+    const pair = await sdk.requests.get(candidate.requestId);
     if (pair === undefined)
       throw new Error("The source request is unavailable");
     const variants = [];
@@ -200,10 +255,28 @@ export class CsrfScanner {
     endpointKey: string,
   ): Promise<OfflinePoc> {
     const candidate = await this.requireCandidate(sdk, endpointKey);
-    const pair = await sdk.requests.get(candidate.requestId as ID);
+    const pair = await sdk.requests.get(candidate.requestId);
     if (pair === undefined)
       throw new Error("The source request is unavailable");
     return generateOfflinePoc(pair.request, candidate);
+  }
+
+  async exportReport(
+    sdk: AssistantSDK,
+    format: ReportFormat,
+    query: CandidateQuery,
+  ): Promise<ReportFile> {
+    const candidates = await this.store.reportCandidates(
+      await this.requireProjectId(sdk),
+      query,
+    );
+    if (candidates.length === 0)
+      throw new Error("No candidates match the selected report filters");
+    return buildReport(
+      format,
+      candidates,
+      this.requireSettings().includeNotesInExport,
+    );
   }
 
   async publishFinding(sdk: AssistantSDK, endpointKey: string): Promise<void> {
@@ -213,7 +286,7 @@ export class CsrfScanner {
         "Mark the candidate Confirmed only after manual verification before publishing a Finding",
       );
     if (candidate.published) return;
-    const pair = await sdk.requests.get(candidate.requestId as ID);
+    const pair = await sdk.requests.get(candidate.requestId);
     if (pair === undefined)
       throw new Error("The source request is unavailable");
     await sdk.findings.create({
@@ -225,27 +298,32 @@ export class CsrfScanner {
         `Authentication evidence: ${candidate.authEvidence}\n` +
         `Token evidence: ${candidate.tokenEvidence}\n` +
         `Origin evidence: ${candidate.originEvidence}\n` +
-        `Cookie defense: ${candidate.cookieDefense}\n\n` +
-        `The reviewer note remains in the plugin and is intentionally omitted from this Finding. Raw credentials and token values are also omitted.`,
+        `Cookie defense: ${candidate.cookieDefense}\n` +
+        `Manual state verification: ${candidate.verification.stateChange}\n\n` +
+        `Reviewer notes, raw credentials, token values, and raw HTTP are intentionally omitted from this Finding.`,
       reporter: "CSRF Review Assistant",
       dedupeKey: `csrf-review:${candidate.endpointKey}`,
       request: pair.request,
     });
     await this.store.markPublished(candidate.projectId, endpointKey);
-    this.emitSnapshot(sdk);
+    this.markChanged(sdk, "candidates", "overview");
   }
 
   async rescan(sdk: AssistantSDK, clear: boolean): Promise<void> {
     const projectId = await this.currentProjectId(sdk);
     if (projectId === undefined) {
-      this.cancel(sdk, "No active Caido project");
+      await this.stopAndDrain(sdk, "No active Caido project");
       return;
     }
     if (!this.requireSettings().analysisEnabled) {
-      this.cancel(sdk, "Passive analysis disabled");
+      await this.stopAndDrain(sdk, "Passive analysis disabled");
       return;
     }
-    this.generation += 1;
+    await this.stopAndDrain(sdk, "Preparing History scan");
+    if (clear) {
+      await this.store.clearCandidates(projectId);
+      this.markChanged(sdk, "candidates", "overview");
+    }
     const generation = this.generation;
     this.queue.length = 0;
     this.processed.clear();
@@ -255,26 +333,27 @@ export class CsrfScanner {
     this.state = {
       phase: "SCANNING",
       queued: 0,
-      active: this.activeWorkers,
+      active: 0,
       scanned: 0,
       dropped: 0,
-      message: "Reading recent Caido HTTP History",
+      message: clear
+        ? "Rebuilding from recent Caido HTTP History"
+        : "Reading recent Caido HTTP History",
     };
-    if (clear) await this.store.clearCandidates(projectId);
     this.publishState(sdk);
-    this.emitSnapshot(sdk);
     void this.readHistory(sdk, projectId, generation);
   }
 
   pause(sdk: AssistantSDK): void {
+    if (this.state.phase !== "SCANNING") return;
     this.paused = true;
     this.state.phase = "PAUSED";
-    this.state.message = "Passive analysis paused";
+    this.state.message = "Passive analysis paused; new work remains queued";
     this.publishState(sdk);
   }
 
   resume(sdk: AssistantSDK): void {
-    if (!this.requireSettings().analysisEnabled) return;
+    if (!this.paused || !this.requireSettings().analysisEnabled) return;
     this.paused = false;
     this.state.phase = "SCANNING";
     this.state.message = "Passive analysis resumed";
@@ -283,23 +362,42 @@ export class CsrfScanner {
     this.finishIfIdle(sdk);
   }
 
-  cancel(sdk: AssistantSDK, message = "Queued analysis cancelled"): void {
-    this.generation += 1;
-    this.queue.length = 0;
-    this.historyReading = false;
-    this.paused = false;
-    this.state.phase = "IDLE";
-    this.state.message = message;
-    this.syncState();
-    this.publishState(sdk);
+  async cancel(sdk: AssistantSDK): Promise<void> {
+    await this.stopAndDrain(sdk, "Queued analysis cancelled");
   }
 
   async clear(sdk: AssistantSDK): Promise<void> {
     const projectId = await this.requireProjectId(sdk);
-    this.cancel(sdk, "Candidates cleared");
+    await this.stopAndDrain(sdk, "Candidates cleared");
     await this.store.clearCandidates(projectId);
     this.state.scanned = 0;
-    this.emitSnapshot(sdk);
+    this.markChanged(sdk, "candidates", "overview");
+  }
+
+  private async changeProject(
+    sdk: AssistantSDK,
+    hasProject: boolean,
+  ): Promise<void> {
+    this.context.clear();
+    this.monitorSince = new Date();
+    if (!hasProject) {
+      await this.stopAndDrain(sdk, "No active Caido project");
+      this.markChanged(sdk, "overview", "candidates");
+      return;
+    }
+    if (
+      this.requireSettings().analysisEnabled &&
+      this.requireSettings().autoHistory
+    )
+      await this.rescan(sdk, false);
+    else
+      this.resetRuntime(
+        sdk,
+        this.requireSettings().analysisEnabled
+          ? "Monitoring new responses"
+          : "Passive analysis disabled",
+      );
+    this.markChanged(sdk, "overview", "candidates");
   }
 
   private async readHistory(
@@ -320,7 +418,7 @@ export class CsrfScanner {
           .query()
           .descending("req", "created_at")
           .first(amount);
-        if (cursor !== undefined) query = query.after(cursor as Cursor);
+        if (cursor !== undefined) query = query.after(cursor);
         const page = await query.execute();
         if (page.items.length === 0) break;
         for (const item of page.items) {
@@ -333,6 +431,7 @@ export class CsrfScanner {
             request: item.request,
             response: item.response,
           });
+          if (selected.length >= settings.historyLimit) break;
         }
         if (!page.pageInfo.hasNextPage) break;
         cursor = page.pageInfo.endCursor;
@@ -340,15 +439,18 @@ export class CsrfScanner {
       selected.reverse();
       for (const work of selected) {
         if (generation !== this.generation) return;
+        while (this.paused && generation === this.generation) await sleep(25);
         this.enqueue(sdk, work);
-        while (this.queue.length > 300 && generation === this.generation)
+        while (this.queue.length > 700 && generation === this.generation)
           await sleep(20);
       }
       if (generation === this.generation)
         this.state.message = `Queued ${selected.length} recent History responses`;
     } catch (error) {
-      this.state.message = `History scan failed: ${safeMessage(error)}`;
-      sdk.console.error(this.state.message);
+      if (generation === this.generation) {
+        this.state.message = `History scan failed: ${safeMessage(error)}`;
+        sdk.console.error(this.state.message);
+      }
     } finally {
       if (generation === this.generation) {
         this.historyReading = false;
@@ -363,7 +465,7 @@ export class CsrfScanner {
     response: Response,
   ): Promise<void> {
     const settings = this.requireSettings();
-    if (!settings.analysisEnabled || this.paused) return;
+    if (!settings.analysisEnabled) return;
     if (settings.scopeOnly && !sdk.requests.inScope(request)) return;
     const projectId = await this.currentProjectId(sdk);
     if (projectId === undefined) return;
@@ -421,15 +523,19 @@ export class CsrfScanner {
   private enqueue(sdk: AssistantSDK, work: Work): void {
     const key = `${work.projectId}:${work.request.getId()}`;
     if (work.generation !== this.generation || this.processed.has(key)) return;
-    this.processed.add(key);
-    if (this.processed.size > this.requireSettings().historyLimit * 2) {
-      const oldest = this.processed.values().next().value as string | undefined;
-      if (oldest !== undefined) this.processed.delete(oldest);
-    }
-    if (this.queue.length >= 500) {
+    if (this.queue.length >= MAX_QUEUE) {
       this.state.dropped += 1;
       this.publishState(sdk);
       return;
+    }
+    this.processed.add(key);
+    const maximumProcessed = Math.max(
+      1_000,
+      this.requireSettings().historyLimit * 2,
+    );
+    if (this.processed.size > maximumProcessed) {
+      const oldest = this.processed.values().next().value;
+      if (oldest !== undefined) this.processed.delete(oldest);
     }
     this.queue.push(work);
     this.state.phase = this.paused ? "PAUSED" : "SCANNING";
@@ -445,7 +551,7 @@ export class CsrfScanner {
       if (work === undefined) break;
       this.activeWorkers += 1;
       this.syncState();
-      void this.process(work)
+      void this.process(sdk, work)
         .catch((error) =>
           sdk.console.error(`CSRF Review scan failed: ${safeMessage(error)}`),
         )
@@ -453,58 +559,104 @@ export class CsrfScanner {
           this.activeWorkers -= 1;
           this.syncState();
           this.publishState(sdk);
-          if (Date.now() - this.lastSnapshot > 300) this.emitSnapshot(sdk);
-          this.pump(sdk);
-          this.finishIfIdle(sdk);
+          if (work.generation === this.generation) {
+            this.pump(sdk);
+            this.finishIfIdle(sdk);
+          } else if (
+            this.activeWorkers === 0 &&
+            this.state.phase === "STOPPING"
+          ) {
+            this.state.phase = "IDLE";
+            this.publishState(sdk);
+          }
         });
     }
   }
 
-  private async process(work: Work): Promise<Assessment | undefined> {
+  private async process(
+    sdk: AssistantSDK,
+    work: Work,
+  ): Promise<Assessment | undefined> {
     if (work.generation !== this.generation) return undefined;
+    const settings = this.requireSettings();
     const { input, responseBody } = toAnalysisInput(
       work.request,
       work.response,
-      this.requireSettings(),
+      settings,
       this.context,
     );
-    const assessment = analyze(input, this.requireSettings());
+    const assessment = analyze(input, settings);
+    if (work.generation !== this.generation) return undefined;
     this.context.observe(input.host, input.responseHeaders, responseBody);
     if (assessment !== undefined) {
       const stored = await this.store.add(
         work.projectId,
         input,
         assessment,
-        this.requireSettings().maxCandidates,
+        settings.maxCandidates,
       );
+      if (work.generation !== this.generation) return undefined;
       if (!stored) this.state.dropped += 1;
+      else this.markChanged(sdk, "candidates", "overview");
     }
-    this.state.scanned += 1;
+    if (work.generation === this.generation) this.state.scanned += 1;
     return assessment;
   }
 
   private finishIfIdle(sdk: AssistantSDK): void {
-    if (this.historyReading || this.queue.length > 0 || this.activeWorkers > 0)
+    if (
+      this.paused ||
+      this.historyReading ||
+      this.queue.length > 0 ||
+      this.activeWorkers > 0
+    )
       return;
     this.state.phase = "IDLE";
     this.state.message = `Passive analysis complete: ${this.state.scanned} responses analyzed`;
     this.syncState();
     this.publishState(sdk);
-    this.emitSnapshot(sdk);
+    this.markChanged(sdk, "overview");
   }
 
-  private resetRuntime(sdk: AssistantSDK, message: string): void {
+  private async stopAndDrain(
+    sdk: AssistantSDK,
+    message: string,
+  ): Promise<void> {
     this.generation += 1;
+    this.queue.length = 0;
+    this.historyReading = false;
+    this.paused = false;
+    this.state.phase = this.activeWorkers > 0 ? "STOPPING" : "IDLE";
+    this.state.message = message;
+    this.syncState();
+    this.publishState(sdk);
+    const deadline = Date.now() + 10_000;
+    while (this.activeWorkers > 0 && Date.now() < deadline) await sleep(10);
+    if (this.activeWorkers > 0)
+      throw new Error("Timed out while stopping the previous analysis workers");
+    this.state.phase = "IDLE";
+    this.syncState();
+    this.publishState(sdk);
+  }
+
+  private resetRuntime(
+    sdk: AssistantSDK,
+    message: string,
+    incrementGeneration = true,
+  ): void {
+    if (incrementGeneration) this.generation += 1;
     this.queue.length = 0;
     this.processed.clear();
     this.context.clear();
     this.historyReading = false;
     this.paused = false;
     this.state.phase = "IDLE";
+    this.state.queued = 0;
+    this.state.active = this.activeWorkers;
     this.state.scanned = 0;
+    this.state.dropped = 0;
     this.state.message = message;
     this.publishState(sdk);
-    this.emitSnapshot(sdk);
   }
 
   private syncState(): void {
@@ -521,13 +673,19 @@ export class CsrfScanner {
     return { ...this.state };
   }
 
-  private emitSnapshot(sdk: AssistantSDK): void {
-    this.lastSnapshot = Date.now();
-    void this.getSnapshot(sdk)
-      .then((snapshot) => sdk.api.send("snapshot", snapshot))
-      .catch((error) =>
-        sdk.console.error(`CSRF snapshot update failed: ${safeMessage(error)}`),
-      );
+  private markChanged(sdk: AssistantSDK, ...areas: DataArea[]): void {
+    for (const area of areas) this.pendingAreas.add(area);
+    if (this.changeScheduled) return;
+    this.changeScheduled = true;
+    setTimeout(() => {
+      this.changeScheduled = false;
+      this.revision += 1;
+      sdk.api.send("data-changed", {
+        revision: this.revision,
+        areas: [...this.pendingAreas],
+      });
+      this.pendingAreas.clear();
+    }, 120);
   }
 
   private requireSettings(): CsrfSettings {
@@ -558,15 +716,35 @@ export class CsrfScanner {
   }
 }
 
+function emptySummary(): Overview["summary"] {
+  return {
+    total: 0,
+    p1: 0,
+    p2: 0,
+    p3: 0,
+    protected: 0,
+    new: 0,
+    needsTesting: 0,
+    confirmed: 0,
+    falsePositive: 0,
+    acceptedRisk: 0,
+    reviewed: 0,
+    published: 0,
+    hosts: 0,
+  };
+}
+
 function safePath(value: string): string {
   try {
+    // eslint-disable-next-line compat/compat -- Caido's plugin runtime provides the URL API.
     return new URL(value).pathname;
   } catch {
-    return value;
+    return value.split(/[?#]/, 1)[0] ?? "/";
   }
 }
 
 function sleep(milliseconds: number): Promise<void> {
+  // eslint-disable-next-line compat/compat -- Caido's async plugin runtime supports Promise.
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 

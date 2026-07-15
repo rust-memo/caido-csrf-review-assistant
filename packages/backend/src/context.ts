@@ -41,7 +41,8 @@ export class TrafficContext {
         hidden &&
         name !== "" &&
         value.length >= 8 &&
-        (looksTokenLike(name) || (value.length >= 12 && looksRandom(value)))
+        looksTokenLike(name) &&
+        (value.length >= 12 || looksRandom(value))
       )
         tokens.add(name);
     }
@@ -91,7 +92,9 @@ function parseAttributes(tag: string): Record<string, string> {
 }
 
 function looksTokenLike(name: string): boolean {
-  return /csrf|xsrf|token|nonce|authenticity|verification/.test(name);
+  return /csrf|xsrf|token|nonce|authenticity|verification|request_guard|form_guard|synchronizer/.test(
+    name,
+  );
 }
 
 function looksRandom(value: string): boolean {

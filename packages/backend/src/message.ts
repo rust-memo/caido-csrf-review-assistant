@@ -9,9 +9,9 @@ export function toAnalysisInput(
   settings: CsrfSettings,
   context: TrafficContext,
 ): { input: AnalysisInput; responseBody: string } {
-  const requestBody = boundedBody(request.getBody()?.toText() ?? "", settings);
+  const requestBody = boundedBody(request.getBody(), settings);
   const responseBody = isTextResponse(request, response)
-    ? boundedBody(response.getBody()?.toText() ?? "", settings)
+    ? boundedBody(response.getBody(), settings).text
     : "";
   const contentType = (request.getHeader("Content-Type") ?? []).join(" ");
   return {
@@ -24,8 +24,9 @@ export function toAnalysisInput(
       path: request.getPath(),
       contentType,
       headers: request.getHeaders(),
-      fields: parseFields(request.getQuery(), requestBody, contentType),
-      body: requestBody,
+      fields: parseFields(request.getQuery(), requestBody.text, contentType),
+      body: requestBody.text,
+      requestBodyTruncated: requestBody.truncated,
       responseHeaders: response.getHeaders(),
       responseStatus: response.getCode(),
       cookieSameSite: context.cookieSameSite(request.getHost()),
@@ -136,10 +137,14 @@ function parseXML(body: string): InputField[] {
   return output;
 }
 
-function boundedBody(value: string, settings: CsrfSettings): string {
-  return new TextEncoder().encode(value).length <= settings.maxBodyBytes
-    ? value
-    : "";
+function boundedBody(
+  body: { length: number; toText(): string } | undefined,
+  settings: CsrfSettings,
+): { text: string; truncated: boolean } {
+  if (body === undefined) return { text: "", truncated: false };
+  return body.length <= settings.maxBodyBytes
+    ? { text: body.toText(), truncated: false }
+    : { text: "", truncated: true };
 }
 
 function isTextResponse(request: Request, response: Response): boolean {

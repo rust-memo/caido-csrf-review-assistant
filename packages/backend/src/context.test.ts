@@ -23,6 +23,16 @@ describe("TrafficContext", () => {
     expect(context.learnedTokenNames("app.test")).toContain("request_guard");
     expect(context.learnedTokenNames("other.test")).toEqual([]);
   });
+
+  it("does not learn unrelated random hidden identifiers as CSRF tokens", () => {
+    const context = new TrafficContext();
+    context.observe(
+      "app.test",
+      {},
+      '<input type="hidden" name="customer_id" value="abc123456789xyz">',
+    );
+    expect(context.learnedTokenNames("app.test")).toEqual([]);
+  });
 });
 
 describe("parseFields", () => {
@@ -50,5 +60,14 @@ describe("parseFields", () => {
     expect(
       parseFields("", multipart, "multipart/form-data; boundary=AaB"),
     ).toContainEqual({ name: "guard", value: "value", location: "MULTIPART" });
+  });
+
+  it("handles malformed and deeply nested field encodings safely", () => {
+    expect(parseFields("bad=%E0%A4%A", "", "")[0]?.value).toBe("%E0%A4%A");
+    expect(parseFields("", "{invalid", "application/json")).toEqual([]);
+    expect(parseFields("", "body", "multipart/form-data")).toEqual([]);
+    expect(
+      parseFields("", "<root><empty></empty></root>", "application/xml"),
+    ).toContainEqual({ name: "empty", value: "", location: "XML" });
   });
 });

@@ -1,90 +1,91 @@
 # CSRF Review Assistant for Caido
 
-CSRF Review Assistant is a passive-by-default, evidence-driven Caido plugin for finding HTTP requests that deserve manual CSRF or Cross-Site WebSocket Hijacking (CSWSH) review.
+Professional, passive-by-default triage for HTTP requests that deserve manual Cross-Site Request Forgery (CSRF), login CSRF, or Cross-Site WebSocket Hijacking (CSWSH) review.
 
-It reports **review candidates, not confirmed vulnerabilities**. The analyzer considers browser-ambient authentication, action sensitivity, request shape, GraphQL operations, observed token signals, Origin/Referer, Fetch Metadata, credentialed CORS, SameSite observations, and WebSocket upgrade evidence.
+> The plugin produces evidence-driven review candidates, not vulnerability verdicts. Use it only on systems you are authorized to test.
 
-## Features
+## Highlights
 
-- Scans recent Caido HTTP History and monitors new responses without sending traffic.
-- Uses Target Scope only by default and supports Conservative, Balanced, and Aggressive policies.
-- Detects sensitive unsafe methods, state-changing GET requests, method overrides, login/OAuth workflows, GraphQL mutations, persisted/batched GraphQL, and WebSocket upgrade handshakes.
-- Finds CSRF tokens in query, form, multipart, JSON, XML, and request-header locations.
-- Learns host-scoped token names from hidden HTML inputs and meta fields.
-- Separates Cookie and Basic/Digest authentication from normally non-ambient Bearer authentication.
-- Records Origin/Referer relationships, Fetch Metadata, CORS evidence, request forgeability, and observed SameSite attributes without claiming server-side enforcement.
-- Groups candidates into P1, P2, P3, and Protection observed priorities.
-- Stores review status and bounded reviewer notes per Caido project.
-- Creates control, token-removal, empty/invalid-token, cross-site-header, and compatible `text/plain` variants in Replay without sending them.
-- Generates a local manual-submit HTML PoC only for GET and URL-encoded POST requests that HTML forms can represent without changing method or parameter location.
-- Exports redacted JSON, CSV, or offline HTML reports. Reviewer notes are excluded by default.
-- Publishes a redacted Caido Finding only after the reviewer explicitly marks a candidate Confirmed.
-- Has no telemetry, cloud dependency, or automatic active verification.
+- Scans bounded Caido HTTP History and monitors new responses without sending traffic.
+- Detects unsafe actions, sensitive GET requests, method overrides, login/OAuth flows, GraphQL mutations, persisted/batched GraphQL, and WebSocket upgrades.
+- Identifies token signals in query, form, multipart, nested JSON, XML, and request headers.
+- Separates browser-ambient Cookie and Basic/Digest authentication from normally non-ambient Bearer authentication.
+- Records Origin/Referer, Fetch Metadata, CORS, request forgeability, observed SameSite attributes, and confidence without claiming server enforcement.
+- Provides Dashboard, paginated Candidate triage, Reports, Settings, and Review Guide workspaces.
+- Supports database-side search/filter/sort, current-page bulk triage, bounded reviewer notes, and project-isolated results.
+- Adds a structured manual verification matrix for control, token-removal, invalid-token, cross-site, and real application-state outcomes.
+- Creates inert Replay variants and constrained manual-submit HTML PoCs. The plugin never presses Send.
+- Publishes a deduplicated, redacted Caido Finding only after explicit manual confirmation.
+- Exports complete sanitized HTML, JSON, and spreadsheet-safe CSV reports from the backend.
 
-## Install
+## Safety and privacy
 
-1. Download `plugin_package.zip` from the latest GitHub Release.
-2. In Caido, open **Settings > Plugins**.
-3. Install the downloaded package and enable **CSRF Review Assistant**.
-4. Put authorized targets in Scope, browse normally, and open the plugin from the sidebar.
+- Passive analysis makes no network request and has no telemetry, AI provider, or cloud dependency.
+- Stored candidates contain normalized endpoint paths and evidence metadata—not raw HTTP, Cookie/Authorization values, or token values.
+- Raw messages are read from the active Caido project only when the reviewer explicitly opens the source HTTP view.
+- Replay variants are inert until the reviewer sends them. Offline PoCs require manual submission and are limited to representable GET or URL-encoded POST forms.
+- Target Scope filtering is enabled by default. Disabling it requires an explicit warning confirmation.
+- Oversized or opaque request bodies are classified as unknown rather than incorrectly treated as token-free.
+- Reviewer notes are excluded from reports by default. Enabling them requires confirmation and an additional redaction pass.
+- Saving Settings is non-destructive. Rebuild and clear are explicit, confirmed operations; review states, notes, and verification matrices survive a rebuild.
+
+## Installation
+
+1. Download `plugin_package.zip` and `SHA256SUMS` from the latest GitHub Release.
+2. Verify the package: `sha256sum --check SHA256SUMS`.
+3. In Caido, open **Settings → Plugins**, install the ZIP, and enable **CSRF Review Assistant**.
+4. Put authorized targets in Scope and open the plugin from the sidebar.
 
 You can also right-click a saved History request or response and choose **Analyze with CSRF Review Assistant**.
 
 ## Recommended workflow
 
-1. Begin with **P1 urgent review** candidates.
-2. Read the authentication, token, Origin, Fetch Metadata, CORS, SameSite, and browser-forgeability evidence.
-3. Create Replay variants. The plugin creates sessions only; it does not press Send.
-4. Inspect each request and understand possible password, payment, permission, deletion, or other state-changing effects.
-5. Use authorized test accounts and compare control, missing/invalid token, and cross-site evidence.
-6. Verify the real server-side state. Status codes and similar response bodies do not confirm CSRF.
-7. Save the review status and publish a Finding only after manual confirmation.
+1. Start with **P1 urgent** candidates and understand the request's possible side effects.
+2. Review authentication, token, Origin, Fetch Metadata, CORS, SameSite, and browser-forgeability evidence.
+3. Create inert Replay variants and inspect every mutation before sending anything.
+4. Use an authorized test account to compare control, token-removal, invalid-token, and cross-site behavior.
+5. Record response acceptance separately from actual application state in the verification matrix.
+6. Save the review decision and publish a Finding only after manual confirmation.
+
+Status codes and similar response bodies do not confirm CSRF. Verify the actual server-side account or application state.
 
 ## Priority model
 
-- **P1:** likely browser-ambient authentication, sensitive/browser-forgeable action, and no identified token or strong observed cookie barrier.
-- **P2:** a missing or weak token with a method, Content-Type, SameSite attribute, or another uncertain browser barrier.
-- **P3:** authentication or state-change evidence is uncertain. This is normally hidden by the Conservative policy.
-- **Protection observed:** a token-like signal is present, but passive inspection cannot prove server validation.
+- **P1:** likely ambient authentication, sensitive/browser-forgeable action, and no identified token or strong observed cookie barrier.
+- **P2:** missing, weak, or unknown token evidence with a browser/protocol barrier that still requires testing.
+- **P3:** authentication or state-change evidence is uncertain and lower-confidence.
+- **Protection observed:** a token-like signal exists, but passive inspection cannot prove server validation.
 
-`Origin`, `Referer`, Fetch Metadata, CORS headers, or SameSite observations are evidence only. Their presence does not prove correct enforcement.
+`Origin`, `Referer`, Fetch Metadata, CORS, and SameSite observations are evidence only.
 
-## Build and verify
+## Development
 
-Node.js 20 or later and pnpm 9 are required.
+Requirements:
+
+- Node.js 22 or newer
+- pnpm 11.13.0
+- A Caido version compatible with plugin SDK 0.57.1
 
 ```bash
 pnpm install --frozen-lockfile
 pnpm typecheck
-pnpm test
+pnpm test:coverage
 pnpm lint
 pnpm knip
+pnpm audit --audit-level high
 pnpm build
 ```
 
-The installable package is created at:
-
-```text
-dist/plugin_package.zip
-```
-
-## Privacy and safety
-
-Passive analysis makes no network request. Replay variants are inert until the user presses Send. The generated PoC is local and requires manual submission.
-
-Candidate storage and reports contain evidence metadata rather than raw HTTP messages, Cookie/Authorization values, or token values. The raw-message view reads the original request from the active Caido project only when requested. Notes are excluded from reports unless explicitly enabled.
+The installable package is created at `dist/plugin_package.zip`. See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution expectations and [GUIDE_AR.md](GUIDE_AR.md) for the Arabic operator guide.
 
 ## Limitations
 
 - Passive evidence cannot establish whether a server accepts a forged request.
-- Custom session-cookie or token names may need to be added in Settings.
-- Opaque, protobuf, and gRPC bodies are not parsed heuristically.
-- Offline PoCs are intentionally limited to GET and URL-encoded POST forms.
-- WebSocket support reviews the upgrade handshake; it does not replay application messages.
-- Cookie SameSite evidence is learned from responses observed during the current plugin session and is not a complete browser cookie-jar simulation.
-
-See [GUIDE_AR.md](GUIDE_AR.md) for the Arabic usage guide.
+- Custom session-cookie, token, or action names may need configuration.
+- Opaque, protobuf, oversized, and gRPC bodies are not guessed.
+- WebSocket review covers the upgrade handshake, not application messages.
+- SameSite evidence is learned from observed responses and is not a full browser cookie-jar simulation.
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+[MIT](LICENSE) © 2026 rust-memo

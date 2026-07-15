@@ -197,7 +197,7 @@ function editXML(
   mode: "remove" | "empty" | "random",
 ): string {
   return value.replace(
-    /<([A-Za-z_][\w:.-]*)\b[^>]*>[\s\S]*?<\/\1\s*>/gu,
+    /<([A-Za-z_][\w:.-]*)\b[^>]*>[^<]*<\/\1\s*>/gu,
     (element: string, rawName: string) => {
       if (normalize(rawName) !== target) return element;
       if (mode === "remove") return "";

@@ -10,6 +10,21 @@ export type ReviewStatus =
 
 export type Sensitivity = "CONSERVATIVE" | "BALANCED" | "AGGRESSIVE";
 
+export type VerificationOutcome =
+  "NOT_TESTED" | "BLOCKED" | "ACCEPTED" | "INCONCLUSIVE";
+
+export type StateOutcome =
+  "NOT_VERIFIED" | "UNCHANGED" | "CHANGED" | "INCONCLUSIVE";
+
+export type VerificationRecord = {
+  control: VerificationOutcome;
+  tokenRemoved: VerificationOutcome;
+  invalidToken: VerificationOutcome;
+  crossSite: VerificationOutcome;
+  stateChange: StateOutcome;
+  updatedAt: string;
+};
+
 export type InputField = {
   name: string;
   value: string;
@@ -27,6 +42,7 @@ export type AnalysisInput = {
   headers: Record<string, string[]>;
   fields: InputField[];
   body: string;
+  requestBodyTruncated: boolean;
   responseHeaders: Record<string, string[]>;
   responseStatus: number;
   cookieSameSite: Record<string, string>;
@@ -76,6 +92,7 @@ export type CandidateDTO = Assessment & {
   responseStatus: number;
   reviewStatus: ReviewStatus;
   note: string;
+  verification: VerificationRecord;
   occurrenceCount: number;
   firstSeen: string;
   lastSeen: string;
@@ -83,7 +100,7 @@ export type CandidateDTO = Assessment & {
 };
 
 export type ScanState = {
-  phase: "IDLE" | "SCANNING" | "PAUSED";
+  phase: "IDLE" | "SCANNING" | "PAUSED" | "STOPPING";
   queued: number;
   active: number;
   scanned: number;
@@ -91,10 +108,61 @@ export type ScanState = {
   message: string;
 };
 
-export type Snapshot = {
-  candidates: CandidateDTO[];
+export type ProjectSummary = {
+  total: number;
+  p1: number;
+  p2: number;
+  p3: number;
+  protected: number;
+  new: number;
+  needsTesting: number;
+  confirmed: number;
+  falsePositive: number;
+  acceptedRisk: number;
+  reviewed: number;
+  published: number;
+  hosts: number;
+};
+
+export type HostSummary = {
+  host: string;
+  total: number;
+  p1: number;
+  confirmed: number;
+  lastSeen: string;
+};
+
+export type Overview = {
   settings: CsrfSettings;
   state: ScanState;
+  summary: ProjectSummary;
+  recentCandidates: CandidateDTO[];
+  topHosts: HostSummary[];
+};
+
+export type CandidateQuery = {
+  search: string;
+  priority: "ALL" | Priority;
+  status: "ALL" | ReviewStatus;
+  host: string;
+  showProtected: boolean;
+  sort: "PRIORITY" | "RECENT" | "OCCURRENCES";
+  offset: number;
+  limit: number;
+};
+
+export type Page<T> = {
+  items: T[];
+  total: number;
+  offset: number;
+  limit: number;
+};
+
+export type DataArea = "overview" | "candidates" | "settings";
+
+export type DataChanged = {
+  revision: number;
+  areas: DataArea[];
 };
 
 export type MessageDetails = {
@@ -121,4 +189,12 @@ export type OfflinePoc = {
   method: string;
   fieldCount: number;
   warning: string;
+};
+
+export type ReportFormat = "html" | "json" | "csv";
+
+export type ReportFile = {
+  filename: string;
+  mediaType: string;
+  content: string;
 };

@@ -31,6 +31,7 @@ function input(overrides: Partial<AnalysisInput> = {}): AnalysisInput {
     headers: { Cookie: ["session=secret"] },
     fields: [{ name: "email", value: "new@example.test", location: "FORM" }],
     body: "email=new%40example.test",
+    requestBodyTruncated: false,
     responseHeaders: {},
     responseStatus: 200,
     cookieSameSite: { session: "none" },
@@ -74,6 +75,35 @@ describe("analyze", () => {
     );
     expect(result?.priority).toBe("REVIEW_2");
     expect(result?.tokenEvidence).toContain("blank, short");
+  });
+
+  it("treats low-diversity token-shaped values as weak evidence", () => {
+    const result = analyze(
+      input({
+        fields: [{ name: "csrf", value: "aaaaaaaaaaaa", location: "FORM" }],
+      }),
+      settings,
+    );
+    expect(result?.priority).toBe("REVIEW_2");
+    expect(result?.tokenEvidence).toContain("placeholder-like");
+  });
+
+  it("distinguishes unspecified SameSite evidence from SameSite=None", () => {
+    const result = analyze(
+      input({ cookieSameSite: { session: "unspecified" } }),
+      settings,
+    );
+    expect(result?.cookieDefense).toBe("SameSite unspecified");
+    expect(result?.priority).toBe("REVIEW_1");
+  });
+
+  it("does not call an oversized unparsed body token-free", () => {
+    const result = analyze(
+      input({ body: "", fields: [], requestBodyTruncated: true }),
+      settings,
+    );
+    expect(result?.priority).toBe("REVIEW_2");
+    expect(result?.tokenEvidence).toContain("exceeded the analysis limit");
   });
 
   it("does not treat Bearer-only authentication as browser ambient", () => {

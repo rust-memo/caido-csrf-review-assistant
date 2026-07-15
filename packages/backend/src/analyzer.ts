@@ -179,7 +179,7 @@ export function analyze(
   let confidence: string;
   if (token.status === "Observed")
     [priority, confidence] = ["PROTECTED", "Medium"];
-  else if (token.status === "Weak")
+  else if (token.status === "Weak" || token.status === "Unknown")
     [priority, confidence] = ["REVIEW_2", "Medium"];
   else if (!auth.ambient) [priority, confidence] = ["REVIEW_3", "Low"];
   else if (
@@ -296,7 +296,7 @@ function tokenEvidence(
   settings: CsrfSettings,
   oauth: boolean,
 ) {
-  const fields: InputField[] = [...input.fields, ...jsonFields(input.body)];
+  const fields: InputField[] = [...input.fields];
   for (const [name, values] of Object.entries(input.headers))
     for (const value of values)
       fields.push({ name, value, location: "HEADER" });
@@ -319,7 +319,12 @@ function tokenEvidence(
       };
       continue;
     }
-    if (field.value.length < 8 || PLACEHOLDERS.has(field.value.toLowerCase())) {
+    const tokenValue = field.value.trim();
+    if (
+      tokenValue.length < 8 ||
+      PLACEHOLDERS.has(tokenValue.toLowerCase()) ||
+      new Set(tokenValue).size < 4
+    ) {
       weak = {
         status: "Weak",
         name,
@@ -334,6 +339,13 @@ function tokenEvidence(
     };
   }
   if (weak !== undefined) return weak;
+  if (input.requestBodyTruncated)
+    return {
+      status: "Unknown",
+      name: "",
+      detail:
+        "Token status unknown because the request body exceeded the analysis limit",
+    };
   if (
     /octet-stream|protobuf|grpc/i.test(input.contentType) &&
     input.body !== ""
@@ -465,10 +477,10 @@ function cookieDefenseFor(input: AnalysisInput, cookies: string[]): string {
   const values = cookies.map((name) =>
     (input.cookieSameSite[name] ?? "unknown").toLowerCase(),
   );
-  if (values.some((v) => ["none", "unspecified"].includes(v)))
-    return "SameSite=None/unspecified";
+  if (values.some((v) => v === "none")) return "SameSite=None";
   if (values.every((v) => v === "strict")) return "SameSite=Strict";
   if (values.some((v) => v === "lax")) return "SameSite=Lax/Strict";
+  if (values.some((v) => v === "unspecified")) return "SameSite unspecified";
   return "SameSite unknown";
 }
 function originEvidence(input: AnalysisInput): string {
@@ -478,6 +490,7 @@ function originEvidence(input: AnalysisInput): string {
   if (value.toLowerCase() === "null")
     return "Origin: null observed; validation unverified";
   try {
+    // eslint-disable-next-line compat/compat -- Caido's plugin runtime provides the URL API.
     return `${header(input.headers, "origin") ? "Origin" : "Referer"} ${new URL(value).origin === new URL(input.url).origin ? "same-origin" : "cross-origin"} observed; server validation unverified`;
   } catch {
     return "Origin/Referer observed but could not be parsed; validation unverified";
@@ -535,34 +548,6 @@ function customHeaders(headers: Record<string, string[]>): string {
   return names.length
     ? `Non-safelisted request headers observed: ${names.join(", ")}; whether the server requires them is unverified`
     : "";
-}
-function jsonFields(body: string): InputField[] {
-  const out: InputField[] = [];
-  try {
-    const walk = (v: unknown, name = "", depth = 0): void => {
-      if (depth > 32) return;
-      if (Array.isArray(v)) v.forEach((x) => walk(x, name, depth + 1));
-      else if (v !== null && typeof v === "object")
-        Object.entries(v).forEach(([n, x]) => walk(x, n, depth + 1));
-      else if (name !== "")
-        out.push({
-          name,
-          value:
-            v === null || v === undefined
-              ? ""
-              : typeof v === "string" ||
-                  typeof v === "number" ||
-                  typeof v === "boolean"
-                ? String(v)
-                : "",
-          location: "JSON",
-        });
-    };
-    walk(JSON.parse(body));
-  } catch {
-    /* not JSON */
-  }
-  return out;
 }
 function endpointKey(
   method: string,

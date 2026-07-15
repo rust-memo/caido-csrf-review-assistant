@@ -21,8 +21,11 @@ export function generateOfflinePoc(
       "Offline form PoCs are limited to GET and URL-encoded POST requests so the method and parameter locations are not changed",
     );
 
+  // eslint-disable-next-line compat/compat -- Caido's plugin runtime provides the URL API.
   const url = new URL(request.getUrl());
   url.hash = "";
+  url.username = "";
+  url.password = "";
   const queryFields = parseEncoded(url.search.replace(/^\?/, ""));
   const fields =
     method === "GET"
