@@ -3,7 +3,7 @@
   "version": "1.1.1",
   "type": "module",
   "scripts": { "typecheck": "vue-tsc --noEmit" },
-  "dependencies": { "vue": "3.5.39" },
+  "dependencies": { "vue": "3.5.40" },
   "devDependencies": {
     "@caido/sdk-backend": "0.57.1",
     "@caido/sdk-frontend": "0.57.1",
